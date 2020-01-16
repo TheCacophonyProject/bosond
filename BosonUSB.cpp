@@ -1,47 +1,31 @@
 #include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 #include <fcntl.h>               // open, O_RDWR
-#include <opencv2/opencv.hpp>
 #include <unistd.h>              // close
 #include <sys/ioctl.h>           // ioctl
 #include <sys/mman.h>
-#include <sys/types.h>
-#include <sys/stat.h>
 #include <linux/videodev2.h>
 
 
-using namespace cv;
+void inspect(void *raw_16, int height, int width) {
+    uint16_t* input_16 = (uint16_t*) raw_16;
+    int i;
+    uint16_t v;
+    uint16_t maxv=0;
+    uint16_t minv=0xFFFF;
 
-void inspect(Mat input_16, int height, int width) {
-    int i, j;  // aux variables
-
-    // auxiliary variables for AGC calcultion
-    unsigned int max1=0;         // 16 bits
-    unsigned int min1=0xFFFF;    // 16 bits
-    unsigned int value1, value2, value3;
-
-    // RUN a super basic AGC
-    for (i=0; i<height; i++) {
-        for (j=0; j<width; j++) {
-            if (i==0 && j==0) {
-                unsigned int x = input_16.at<unsigned short>(i, j);
-                printf("x=%d\n", x);
-                unsigned int y = ((x & 0xff00) >> 8) + ((x & 0xff) << 8);
-                printf("y=%d\n", y);
-            }
-
-            value1 =  input_16.at<uchar>(i,j*2+1) & 0XFF ;  // High Byte
-            value2 =  input_16.at<uchar>(i,j*2) & 0xFF  ;    // Low Byte
-            value3 = ( value1 << 8) + value2;
-            if ( value3 <= min1 ) {
-                min1 = value3;
-            }
-            if ( value3 >= max1 ) {
-                max1 = value3;
-            }
+    for (i=0; i<height*width; i++) {
+        v = input_16[i];
+        if (v <= minv ) {
+            minv = v;
+        }
+        if (v >= maxv ) {
+            maxv = v;
         }
     }
-
-    printf("min=%d max=%d\n", min1, max1);
+    printf("min=%d max=%d\n", minv, maxv);
 }
 
 
@@ -50,18 +34,10 @@ int main(int argc, char** argv)
     int fd;
     struct v4l2_capability cap;
     char video[20];   // To store Video Port Device
-    char label[50];   // To display the information
-    char thermal_sensor_name[20];  // To store the sensor name
     int width;
     int height;
 
-    // To record images
-    std::vector<int> compression_params;
-    compression_params.push_back(IMWRITE_PXM_BINARY);
-
-    // Video device by default
     sprintf(video, "/dev/video1");
-    sprintf(thermal_sensor_name, "Boson_640");
     width=640;
     height=512;
 
@@ -148,17 +124,6 @@ int main(int argc, char** argv)
         exit(1);
     }
 
-
-    // Declarations for RAW16 representation
-    // Will be used in case we are reading RAW16 format
-    // Boson320 , Boson 640
-    Mat thermal16(height, width, CV_16U, buffer_start);   // OpenCV input buffer  : Asking for all info: two bytes per pixel (RAW16)  RAW16 mode`
-
-    // Declarations for Zoom representation
-    // Will be used or not depending on program arguments
-    Size size(640,512);
-
-    // Reaad frame, do AGC, paint frame
     for (;;) {
 
         // Put the buffer in the incoming queue.
@@ -173,15 +138,7 @@ int main(int argc, char** argv)
             exit(1);
         }
 
-        // cv::Scalar v = cv::mean(thermal16);
-        // printf("%.0f\n", v.val[0]);
-
-        inspect(thermal16, height, width);
-
-        if (waitKey(1) == 'q') {
-            printf(">>> 'q' key pressed. Quitting !\n");
-            break;
-        }
+        inspect(buffer_start, height, width);
     }
     // Finish Loop . Exiting.
 
@@ -192,5 +149,5 @@ int main(int argc, char** argv)
     };
 
     close(fd);
-    return EXIT_SUCCESS;
+    return 0;
 }
