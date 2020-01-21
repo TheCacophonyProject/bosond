@@ -1,21 +1,30 @@
-EXEC      = bosond
-SRC_FILES = bosond.cpp
-
 CXX = g++
 CC = $(CXX)
 
-# What flags should be passed to the compiler
+EXEC = bosond
 
-DEBUG_LEVEL     = -g
-EXTRA_CCFLAGS   = -Wall
+SRC = bosond.cpp
+OBJS := $(SRC:.cpp=.o)
+
+SDK_SRC = $(wildcard boson_sdk/*.c)
+SDK_OBJS := $(SDK_SRC:.c=.o)
+
+# C++ compiler flags
+DEBUG_LEVEL = -g
+EXTRA_CCFLAGS = -Wall
 CXXFLAGS        = $(DEBUG_LEVEL) $(EXTRA_CCFLAGS)
 CCFLAGS         = $(CXXFLAGS)
-O_FILES         = $(SRC_FILES:%.cpp=%.o)
+CPPFLAGS        = -I /usr/include/libusb-1.0 -I boson_sdk
+LDLIBS          = -lusb-1.0
+
+# C compiler flags (for boson_sdk). The SDK code isn't that clean so
+# warnings are suppressed.
+CFLAGS = $(DEBUG_LEVEL) -fpermissive -w
 
 all: $(EXEC)
 
-$(EXEC): $(O_FILES)
+$(EXEC): $(OBJS) $(SDK_OBJS)
 
 .PHONY: clean
 clean:
-	rm -f ${EXEC} ${O_FILES}
+	rm -f ${EXEC} ${OBJS} $(SDK_OBJS)
