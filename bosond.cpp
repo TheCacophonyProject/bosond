@@ -6,6 +6,10 @@
 #include <unistd.h>              // close
 #include <sys/ioctl.h>           // ioctl
 #include <sys/mman.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/un.h>
 #include <linux/videodev2.h>
 
 
@@ -116,6 +120,17 @@ int main(int argc, char** argv)
 
     // Fill this buffer with ceros. Initialization. Optional but nice to do
     memset(buffer_start, 0, bufferinfo.length);
+
+    int sock = socket(AF_UNIX, SOCK_STREAM, 0);
+
+    struct sockaddr_un addr = { .sun_family = AF_UNIX };
+    strncpy(addr.sun_path, "/var/run/lepton-frames", sizeof(addr.sun_path)-1);
+
+    if (connect(sock, (sockaddr*) (&addr), sizeof(addr)) < 0) {
+        perror("CONNECT");
+        exit(1);
+    }
+
 
     // Activate streaming
     int type = bufferinfo.type;
