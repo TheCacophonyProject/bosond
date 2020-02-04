@@ -37,7 +37,7 @@ int main(int argc, char** argv)
     int width;
     int height;
 
-    sprintf(video, "/dev/video1");
+    sprintf(video, "/dev/video0");
     width=640;
     height=512;
 
