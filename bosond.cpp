@@ -11,7 +11,11 @@
 #include <sys/types.h>
 #include <sys/un.h>
 #include <linux/videodev2.h>
+#include <string>
+#include <iostream>
+#include <chrono>
 
+using std::chrono::system_clock;
 
 void inspect(void *raw_16, int height, int width) {
     uint16_t* input_16 = (uint16_t*) raw_16;
@@ -30,6 +34,21 @@ void inspect(void *raw_16, int height, int width) {
         }
     }
     printf("min=%d max=%d\n", minv, maxv);
+}
+
+int sendall(int sock, const char *data, size_t len) {
+    int left = len;
+    int n;
+
+    while (left > 0) {
+        n = send(sock, data, left, 0);
+        if (n < 0) {
+            return n;
+        }
+        left -= n;
+        data += n;
+    }
+    return 0;
 }
 
 
@@ -106,11 +125,7 @@ int main(int argc, char** argv)
         exit(1);
     }
 
-    // map fd+offset into a process location (kernel will decide due to our NULL). lenght and
-    // properties are also passed
-    printf(">>> Image width   = %i\n", width);
-    printf(">>> Image height  = %i\n", height);
-    printf(">>> Buffer length = %i\n", bufferinfo.length);
+    std::cout << "Buffer size: " << bufferinfo.length << std::endl;
 
     void * buffer_start = mmap(NULL, bufferinfo.length, PROT_READ | PROT_WRITE, MAP_SHARED, fd, bufferinfo.m.offset);
     if (buffer_start == MAP_FAILED) {
@@ -123,6 +138,12 @@ int main(int argc, char** argv)
 
     int sock = socket(AF_UNIX, SOCK_STREAM, 0);
 
+    int send_size = bufferinfo.length;
+    if (setsockopt(sock, SOL_SOCKET, SO_SNDBUF, (const void *)&send_size, sizeof(send_size)) < 0) {
+        perror("SETSOCKOPT");
+        exit(1);
+    }
+
     struct sockaddr_un addr = { .sun_family = AF_UNIX };
     strncpy(addr.sun_path, "/var/run/lepton-frames", sizeof(addr.sun_path)-1);
 
@@ -131,6 +152,20 @@ int main(int argc, char** argv)
         exit(1);
     }
 
+    std::string headers = std::string();
+    headers += "Brand: flir\n";
+    headers += "Model: boson\n";
+    headers += "ResX: 640\n";
+    headers += "ResY: 512\n";
+    headers += "FPS: 60\n";
+    headers += "FrameSize: 655360\n";
+    headers += "PixelBits: 16\n";
+    headers += "\n";
+
+    if (sendall(sock, headers.data(), headers.length()) < 0) {
+        perror("HEADERS");
+        exit(1);
+    }
 
     // Activate streaming
     int type = bufferinfo.type;
@@ -139,6 +174,9 @@ int main(int argc, char** argv)
         exit(1);
     }
 
+
+    system_clock::time_point t0 = system_clock::now();
+    int count = 0;
     for (;;) {
 
         // Put the buffer in the incoming queue.
@@ -153,8 +191,20 @@ int main(int argc, char** argv)
             exit(1);
         }
 
-        inspect(buffer_start, height, width);
+        count++;
+        if (count == 100) {
+            system_clock::time_point t1 = system_clock::now();
+            std::cout << "td = " << std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() << "[µs]" << std::endl;
+            t0 = t1;
+            count = 0;
+        }
+
+        if (sendall(sock, (const char *) buffer_start, bufferinfo.length) < 0) {
+            perror("SEND");
+            exit(1);
+        }
     }
+
     // Finish Loop . Exiting.
 
     // Deactivate streaming
