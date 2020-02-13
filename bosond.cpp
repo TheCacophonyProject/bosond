@@ -14,27 +14,16 @@
 #include <string>
 #include <iostream>
 #include <chrono>
+#include <tclap/CmdLine.h>
 
 using std::chrono::system_clock;
 
-void inspect(void *raw_16, int height, int width) {
-    uint16_t* input_16 = (uint16_t*) raw_16;
-    int i;
-    uint16_t v;
-    uint16_t maxv=0;
-    uint16_t minv=0xFFFF;
+const int width = 640;
+const int height = 512;
 
-    for (i=0; i<height*width; i++) {
-        v = input_16[i];
-        if (v <= minv ) {
-            minv = v;
-        }
-        if (v >= maxv ) {
-            maxv = v;
-        }
-    }
-    printf("min=%d max=%d\n", minv, maxv);
-}
+static std::string videoDevice("/dev/video");
+static std::string socketPath;
+static bool printTimings;
 
 int sendall(int sock, const char *data, size_t len) {
     int left = len;
@@ -52,19 +41,40 @@ int sendall(int sock, const char *data, size_t len) {
 }
 
 
-int main(int argc, char** argv)
-{
+void processArgs(int argc, char **argv) {
+    try {
+
+        TCLAP::CmdLine cmd("Read FLIR Boson frames", ' ', "0.1");
+
+        TCLAP::ValueArg<int> deviceArg("d", "device", "Video device number to use", false, 0, "int");
+        cmd.add(deviceArg);
+
+        TCLAP::ValueArg<std::string> socketArg("p", "socket-path", "Path to output socket", false, "/var/run/lepton-frames", "string");
+        cmd.add(socketArg);
+
+        TCLAP::SwitchArg timingsArg("t", "print-timing", "Print frame timings");
+        cmd.add(timingsArg);
+
+        cmd.parse(argc, argv);
+
+        videoDevice += std::to_string(deviceArg.getValue());
+        socketPath = socketArg.getValue();
+        printTimings = timingsArg.getValue();
+
+    } catch (TCLAP::ArgException &e) {
+        std::cerr << "error: " << e.error() << " for arg " << e.argId() << std::endl;
+        exit(2);
+    }
+}
+
+
+int main(int argc, char** argv) {
     int fd;
     struct v4l2_capability cap;
-    char video[20];   // To store Video Port Device
-    int width;
-    int height;
 
-    sprintf(video, "/dev/video0");
-    width=640;
-    height=512;
+    processArgs(argc, argv);
 
-    if((fd = open(video, O_RDWR)) < 0){
+    if((fd = open(videoDevice.c_str(), O_RDWR)) < 0){
         perror("Error : OPEN. Invalid Video Device\n");
         exit(1);
     }
@@ -120,22 +130,19 @@ int main(int argc, char** argv)
     bufferinfo.memory = V4L2_MEMORY_MMAP;
     bufferinfo.index = 0;
 
-    if(ioctl(fd, VIDIOC_QUERYBUF, &bufferinfo) < 0){
+    if (ioctl(fd, VIDIOC_QUERYBUF, &bufferinfo) < 0) {
         perror("VIDIOC_QUERYBUF");
         exit(1);
     }
 
-    std::cout << "Buffer size: " << bufferinfo.length << std::endl;
-
-    void * buffer_start = mmap(NULL, bufferinfo.length, PROT_READ | PROT_WRITE, MAP_SHARED, fd, bufferinfo.m.offset);
+    void *buffer_start = mmap(NULL, bufferinfo.length, PROT_READ | PROT_WRITE, MAP_SHARED, fd, bufferinfo.m.offset);
     if (buffer_start == MAP_FAILED) {
         perror("mmap");
         exit(1);
     }
-
-    // Fill this buffer with ceros. Initialization. Optional but nice to do
     memset(buffer_start, 0, bufferinfo.length);
 
+    // Init socket.
     int sock = socket(AF_UNIX, SOCK_STREAM, 0);
 
     int send_size = bufferinfo.length;
@@ -145,24 +152,24 @@ int main(int argc, char** argv)
     }
 
     struct sockaddr_un addr = { .sun_family = AF_UNIX };
-    strncpy(addr.sun_path, "/var/run/lepton-frames", sizeof(addr.sun_path)-1);
+    strncpy(addr.sun_path, socketPath.c_str(), sizeof(addr.sun_path)-1);
 
     if (connect(sock, (sockaddr*) (&addr), sizeof(addr)) < 0) {
         perror("CONNECT");
         exit(1);
     }
 
-    std::string headers = std::string();
-    headers += "Brand: flir\n";
-    headers += "Model: boson\n";
-    headers += "ResX: 640\n";
-    headers += "ResY: 512\n";
-    headers += "FPS: 60\n";
-    headers += "FrameSize: 655360\n";
-    headers += "PixelBits: 16\n";
-    headers += "\n";
-
-    if (sendall(sock, headers.data(), headers.length()) < 0) {
+    std::ostringstream headers;
+    headers << "Brand: flir\n";
+    headers << "Model: boson\n";
+    headers << "ResX: " << width << '\n';
+    headers << "ResY: " << height << '\n';
+    headers << "FPS: 60\n";
+    headers << "FrameSize: " << (width * height * 2) << '\n';
+    headers << "PixelBits: 16\n";
+    headers << '\n';
+    auto header_str = headers.str();
+    if (sendall(sock, header_str.data(), header_str.length()) < 0) {
         perror("HEADERS");
         exit(1);
     }
@@ -174,11 +181,9 @@ int main(int argc, char** argv)
         exit(1);
     }
 
-
     system_clock::time_point t0 = system_clock::now();
     int count = 0;
     for (;;) {
-
         // Put the buffer in the incoming queue.
         if(ioctl(fd, VIDIOC_QBUF, &bufferinfo) < 0){
             perror("VIDIOC_QBUF");
@@ -191,12 +196,14 @@ int main(int argc, char** argv)
             exit(1);
         }
 
-        count++;
-        if (count == 100) {
-            system_clock::time_point t1 = system_clock::now();
-            std::cout << "td = " << std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() << "[µs]" << std::endl;
-            t0 = t1;
-            count = 0;
+        if (printTimings) {
+            count++;
+            if (count == 100) {
+                system_clock::time_point t1 = system_clock::now();
+                std::cout << "td = " << std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() << "[µs]" << std::endl;
+                t0 = t1;
+                count = 0;
+            }
         }
 
         if (sendall(sock, (const char *) buffer_start, bufferinfo.length) < 0) {
@@ -204,8 +211,6 @@ int main(int argc, char** argv)
             exit(1);
         }
     }
-
-    // Finish Loop . Exiting.
 
     // Deactivate streaming
     if( ioctl(fd, VIDIOC_STREAMOFF, &type) < 0 ){
