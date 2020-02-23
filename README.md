@@ -9,11 +9,15 @@ compatible Unix domain socket.
 ## Usage
 
 ```
-   ./bosond  [-t <bool>] [-p <string>] [-d <int>] [--] [--version] [-h]
+./bosond  [-x] [-t] [-p <string>] [-d <int>] [--] [--version] [-h]
+
 
 Where:
 
-   -t <bool>,  -- <bool>
+   -x,  --no-send
+     Just read frames without connecting to socket
+
+   -t,  --print-timing
      Print frame timings
 
    -p <string>,  --socket-path <string>
@@ -21,9 +25,6 @@ Where:
 
    -d <int>,  --device <int>
      Video device number to use
-
-   --,  --ignore_rest
-     Ignores the rest of the labeled arguments following this flag.
 
    --version
      Displays version information and exits.
@@ -41,6 +42,28 @@ Where:
 $ sudo apt install libtclap-dev
 $ make
 ```
+
+## Running
+
+For more consistent performance run with Linux real-time FIFO priority of 1. For example:
+
+```
+chrt --fifo 1 ./bosond -t
+```
+
+If running using systemd, use the equivalent options for setting
+process priority there.
+
+On a Raspberry Pi, ensure that the `performance` CPU scaling governor
+is used for a more consistent frame rate:
+
+```
+(as root)
+$ echo performance > /sys/devices/system/cpu/cpufreq/policy0/scaling_governor
+```
+
+This change can be persisted across reboots by dropping an appropriate
+file in `/etc/sysctl.d/`.
 
 ## References
 

@@ -16,14 +16,20 @@
 #include <chrono>
 #include <tclap/CmdLine.h>
 
-using std::chrono::system_clock;
+
+using namespace std::chrono;
+
 
 const int width = 640;
 const int height = 512;
+const int pix_bytes = 2;
+const int num_buffers = 2;
 
 static std::string videoDevice("/dev/video");
 static std::string socketPath;
 static bool printTimings;
+static bool sendFrames;
+
 
 int sendall(int sock, const char *data, size_t len) {
     int left = len;
@@ -55,11 +61,15 @@ void processArgs(int argc, char **argv) {
         TCLAP::SwitchArg timingsArg("t", "print-timing", "Print frame timings");
         cmd.add(timingsArg);
 
+        TCLAP::SwitchArg sendArg("x", "no-send", "Just read frames without connecting to socket", true);
+        cmd.add(sendArg);
+
         cmd.parse(argc, argv);
 
         videoDevice += std::to_string(deviceArg.getValue());
         socketPath = socketArg.getValue();
         printTimings = timingsArg.getValue();
+        sendFrames = sendArg.getValue();
 
     } catch (TCLAP::ArgException &e) {
         std::cerr << "error: " << e.error() << " for arg " << e.argId() << std::endl;
@@ -74,18 +84,18 @@ int main(int argc, char** argv) {
 
     processArgs(argc, argv);
 
-    if((fd = open(videoDevice.c_str(), O_RDWR)) < 0){
+    if ((fd = open(videoDevice.c_str(), O_RDWR)) < 0) {
         perror("Error : OPEN. Invalid Video Device\n");
         exit(1);
     }
 
     // Check VideoCapture mode is available
-    if(ioctl(fd, VIDIOC_QUERYCAP, &cap) < 0){
+    if (ioctl(fd, VIDIOC_QUERYCAP, &cap) < 0) {
         perror("ERROR : VIDIOC_QUERYCAP. Video Capture is not available\n");
         exit(1);
     }
 
-    if(!(cap.capabilities & V4L2_CAP_VIDEO_CAPTURE)){
+    if (!(cap.capabilities & V4L2_CAP_VIDEO_CAPTURE)) {
         fprintf(stderr, "The device does not handle single-planar video capture.\n");
         exit(1);
     }
@@ -99,125 +109,132 @@ int main(int argc, char** argv) {
     format.fmt.pix.height = height;
 
     // request desired FORMAT
-    if(ioctl(fd, VIDIOC_S_FMT, &format) < 0){
+    if (ioctl(fd, VIDIOC_S_FMT, &format) < 0) {
         perror("VIDIOC_S_FMT");
         exit(1);
     }
 
-    // we need to inform the device about buffers to use.
-    // and we need to allocate them.
-    // we’ll use a single buffer, and map our memory using mmap.
-    // All this information is sent using the VIDIOC_REQBUFS call and a
-    // v4l2_requestbuffers structure:
+    // Allocate mmap buffers for retrieving video frames.
     struct v4l2_requestbuffers bufrequest;
     bufrequest.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     bufrequest.memory = V4L2_MEMORY_MMAP;
-    bufrequest.count = 1;   // we are asking for one buffer
-
-    if(ioctl(fd, VIDIOC_REQBUFS, &bufrequest) < 0){
+    bufrequest.count = num_buffers;
+    if (ioctl(fd, VIDIOC_REQBUFS, &bufrequest) < 0) {
         perror("VIDIOC_REQBUFS");
         exit(1);
     }
 
-    // Now that the device knows how to provide its data,
-    // we need to ask it about the amount of memory it needs,
-    // and allocate it. This information is retrieved using the VIDIOC_QUERYBUF call,
-    // and its v4l2_buffer structure.
-    struct v4l2_buffer bufferinfo;
-    memset(&bufferinfo, 0, sizeof(bufferinfo));
+    // Now find out about the buffers that were created and map them.
+    struct v4l2_buffer bufferinfo[num_buffers];
+    void *buffer[num_buffers];
+    for (int i = 0; i < num_buffers; i++) {
+        memset(&bufferinfo[i], 0, sizeof(struct v4l2_buffer));
+        bufferinfo[i].type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        bufferinfo[i].memory = V4L2_MEMORY_MMAP;
+        bufferinfo[i].index = i;
+        if (ioctl(fd, VIDIOC_QUERYBUF, &bufferinfo[i]) < 0) {
+            perror("VIDIOC_QUERYBUF");
+            exit(1);
+        }
 
-    bufferinfo.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    bufferinfo.memory = V4L2_MEMORY_MMAP;
-    bufferinfo.index = 0;
-
-    if (ioctl(fd, VIDIOC_QUERYBUF, &bufferinfo) < 0) {
-        perror("VIDIOC_QUERYBUF");
-        exit(1);
+        buffer[i] = mmap(NULL, bufferinfo[i].length, PROT_READ | PROT_WRITE, MAP_SHARED, fd, bufferinfo[i].m.offset);
+        if (buffer[i] == MAP_FAILED) {
+            perror("mmap");
+            exit(1);
+        }
+        memset(buffer[i], 0, bufferinfo[i].length);
     }
-
-    void *buffer_start = mmap(NULL, bufferinfo.length, PROT_READ | PROT_WRITE, MAP_SHARED, fd, bufferinfo.m.offset);
-    if (buffer_start == MAP_FAILED) {
-        perror("mmap");
-        exit(1);
-    }
-    memset(buffer_start, 0, bufferinfo.length);
 
     // Init socket.
     int sock = socket(AF_UNIX, SOCK_STREAM, 0);
 
-    int send_size = bufferinfo.length;
-    if (setsockopt(sock, SOL_SOCKET, SO_SNDBUF, (const void *)&send_size, sizeof(send_size)) < 0) {
-        perror("SETSOCKOPT");
-        exit(1);
-    }
+    if (sendFrames) {
+        int send_size = bufferinfo[0].length;
+        if (setsockopt(sock, SOL_SOCKET, SO_SNDBUF, (const void *)&send_size, sizeof(send_size)) < 0) {
+            perror("SETSOCKOPT");
+            exit(1);
+        }
 
-    struct sockaddr_un addr = { .sun_family = AF_UNIX };
-    strncpy(addr.sun_path, socketPath.c_str(), sizeof(addr.sun_path)-1);
+        struct sockaddr_un addr = { .sun_family = AF_UNIX };
+        strncpy(addr.sun_path, socketPath.c_str(), sizeof(addr.sun_path)-1);
 
-    if (connect(sock, (sockaddr*) (&addr), sizeof(addr)) < 0) {
-        perror("CONNECT");
-        exit(1);
-    }
+        if (connect(sock, (sockaddr*) (&addr), sizeof(addr)) < 0) {
+            perror("CONNECT");
+            exit(1);
+        }
 
-    std::ostringstream headers;
-    headers << "Brand: flir\n";
-    headers << "Model: boson\n";
-    headers << "ResX: " << width << '\n';
-    headers << "ResY: " << height << '\n';
-    headers << "FPS: 60\n";
-    headers << "FrameSize: " << (width * height * 2) << '\n';
-    headers << "PixelBits: 16\n";
-    headers << '\n';
-    auto header_str = headers.str();
-    if (sendall(sock, header_str.data(), header_str.length()) < 0) {
-        perror("HEADERS");
-        exit(1);
+        std::ostringstream headers;
+        headers << "Brand: flir\n";
+        headers << "Model: boson\n";
+        headers << "ResX: " << width << '\n';
+        headers << "ResY: " << height << '\n';
+        headers << "FPS: 60\n";
+        headers << "FrameSize: " << (width * height * pix_bytes) << '\n';
+        headers << "PixelBits: " << (pix_bytes * 2) << '\n';
+        headers << '\n';
+        auto header_str = headers.str();
+        if (sendall(sock, header_str.data(), header_str.length()) < 0) {
+            perror("HEADERS");
+            exit(1);
+        }
     }
 
     // Activate streaming
-    int type = bufferinfo.type;
-    if(ioctl(fd, VIDIOC_STREAMON, &type) < 0){
+    if (ioctl(fd, VIDIOC_STREAMON, &bufferinfo[0].type) < 0) {
         perror("VIDIOC_STREAMON");
         exit(1);
     }
 
-    system_clock::time_point t0 = system_clock::now();
+    steady_clock::time_point t0 = steady_clock::now();
+
+    // Indices of the buffer being filled (i_active) and the buffer
+    // that is full and is ready to send (i_full).
+    int i_active = 0;
+    int i_full = 1;
+
+    // Put the first buffer in the incoming queue.
+    if (ioctl(fd, VIDIOC_QBUF, &bufferinfo[i_active]) < 0) {
+        perror("VIDIOC_QBUF");
+        exit(1);
+    }
+
     int count = 0;
     for (;;) {
-        // Put the buffer in the incoming queue.
-        if(ioctl(fd, VIDIOC_QBUF, &bufferinfo) < 0){
+        // Wait for active buffer to be filled.
+        if (ioctl(fd, VIDIOC_DQBUF, &bufferinfo[i_active]) < 0) {
+            perror("VIDIOC_DQBUF");
+            exit(1);
+        }
+
+        std::swap(i_active, i_full);  // Switch buffer roles
+
+        // Put next buffer in the incoming queue so the video driver
+        // can start filling it.
+        if (ioctl(fd, VIDIOC_QBUF, &bufferinfo[i_active]) < 0) {
             perror("VIDIOC_QBUF");
             exit(1);
         }
 
-        // The buffer's waiting in the outgoing queue.
-        if(ioctl(fd, VIDIOC_DQBUF, &bufferinfo) < 0) {
-            perror("VIDIOC_QBUF");
-            exit(1);
+        // Send full buffer while other buffer is being filled.
+        if (sendFrames) {
+            if (sendall(sock, (const char *) buffer[i_full], bufferinfo[i_full].length) < 0) {
+                perror("SEND");
+                exit(1);
+            }
         }
 
         if (printTimings) {
             count++;
-            if (count == 100) {
-                system_clock::time_point t1 = system_clock::now();
-                std::cout << "td = " << std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() << "[µs]" << std::endl;
+            if (count == 120) {
+                steady_clock::time_point t1 = steady_clock::now();
+                auto us = duration_cast<microseconds>(t1 - t0).count();
+                auto rate = count / ((float)us / 1e6);
+                std::cout << rate << "Hz" << std::endl;
                 t0 = t1;
                 count = 0;
             }
         }
-
-        if (sendall(sock, (const char *) buffer_start, bufferinfo.length) < 0) {
-            perror("SEND");
-            exit(1);
-        }
     }
 
-    // Deactivate streaming
-    if( ioctl(fd, VIDIOC_STREAMOFF, &type) < 0 ){
-        perror("VIDIOC_STREAMOFF");
-        exit(1);
-    };
-
-    close(fd);
     return 0;
 }
