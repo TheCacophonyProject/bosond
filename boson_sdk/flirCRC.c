@@ -36,7 +36,6 @@ static const uint16_t ccitt_16Table[] = {
 };
 
 
-#define _FAST
 #ifdef _FAST
 //
 //  ===== ByteCRC16 =====  FAST
