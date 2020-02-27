@@ -277,7 +277,7 @@ int main(int argc, char** argv) {
                 t0 = t1;
                 count = 0;
 
-                /*
+                /* Example of how to retrieve current frame count from camera
                 uint32_t frameCount;
                 roicGetFrameCount(&frameCount);
                 std::cout << frameCount << " frames" << std::endl;
