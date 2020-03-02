@@ -16,6 +16,10 @@
 #include <chrono>
 #include <tclap/CmdLine.h>
 
+// Boson SDK includes
+#include <libusb.h>
+#include "UART_Connector.h"
+#include "Client_API.h"
 
 using namespace std::chrono;
 
@@ -29,22 +33,6 @@ static std::string videoDevice("/dev/video");
 static std::string socketPath;
 static bool printTimings;
 static bool sendFrames;
-
-
-int sendall(int sock, const char *data, size_t len) {
-    int left = len;
-    int n;
-
-    while (left > 0) {
-        n = send(sock, data, left, 0);
-        if (n < 0) {
-            return n;
-        }
-        left -= n;
-        data += n;
-    }
-    return 0;
-}
 
 
 void processArgs(int argc, char **argv) {
@@ -77,12 +65,68 @@ void processArgs(int argc, char **argv) {
     }
 }
 
+// Initalise the command control interface (CCI) using SDK.
+void initCCI() {
+    libusb_device_handle* dev_h;
+
+    if (libusb_init(NULL) < 0) {
+        perror("Error: Failed libusb init");
+        exit(1);
+    }
+
+    if ((dev_h = libusb_open_device_with_vid_pid(NULL, 0x09cb, 0x4007)) == NULL) {
+        perror("couldn't open USB device");
+        exit(1);
+    }
+
+    Initialize(dev_h);
+}
+
+int logCameraInfo() {
+    uint32_t major, minor, patch;
+    if (int result = bosonGetSoftwareRev(&major, &minor, &patch)) {
+        std::cout << "failed to get software rev: " << result << '\n';
+        return -1;
+    }
+
+    std::cout << "Boson firmware version: " << major << '.' << minor << '.' << patch << '\n';
+    uint32_t camera_sn;
+    if (int result = bosonGetCameraSN(&camera_sn)) {
+        std::cout << "failed to get serial number: " << result << '\n';
+        return -1;
+    }
+    std::cout << "Boson serial: " << camera_sn << '\n';
+
+    return 0;
+}
+
+int sendAll(int sock, const char *data, size_t len) {
+    int left = len;
+    int n;
+
+    while (left > 0) {
+        n = send(sock, data, left, 0);
+        if (n < 0) {
+            return n;
+        }
+        left -= n;
+        data += n;
+    }
+    return 0;
+}
+
+
 
 int main(int argc, char** argv) {
     int fd;
     struct v4l2_capability cap;
 
     processArgs(argc, argv);
+
+    initCCI();
+    if (logCameraInfo()) {
+        exit(1);
+    }
 
     if ((fd = open(videoDevice.c_str(), O_RDWR)) < 0) {
         perror("Error : OPEN. Invalid Video Device\n");
@@ -173,7 +217,7 @@ int main(int argc, char** argv) {
         headers << "PixelBits: " << (pix_bytes * 2) << '\n';
         headers << '\n';
         auto header_str = headers.str();
-        if (sendall(sock, header_str.data(), header_str.length()) < 0) {
+        if (sendAll(sock, header_str.data(), header_str.length()) < 0) {
             perror("HEADERS");
             exit(1);
         }
@@ -217,7 +261,7 @@ int main(int argc, char** argv) {
 
         // Send full buffer while other buffer is being filled.
         if (sendFrames) {
-            if (sendall(sock, (const char *) buffer[i_full], bufferinfo[i_full].length) < 0) {
+            if (sendAll(sock, (const char *) buffer[i_full], bufferinfo[i_full].length) < 0) {
                 perror("SEND");
                 exit(1);
             }
@@ -232,6 +276,12 @@ int main(int argc, char** argv) {
                 std::cout << rate << "Hz" << std::endl;
                 t0 = t1;
                 count = 0;
+
+                /* Example of how to retrieve current frame count from camera
+                uint32_t frameCount;
+                roicGetFrameCount(&frameCount);
+                std::cout << frameCount << " frames" << std::endl;
+                */
             }
         }
     }
