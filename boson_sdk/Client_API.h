@@ -81,6 +81,7 @@ FLR_RESULT bosonGetFFCInProgress(int16_t *data);
 FLR_RESULT bosonReboot();
 FLR_RESULT bosonSetFFCMode(const FLR_BOSON_FFCMODE_E ffcMode);
 FLR_RESULT bosonGetFFCMode(FLR_BOSON_FFCMODE_E *ffcMode);
+FLR_RESULT bosonGetLastFFCFrameCount(uint32_t *frameCount);
 FLR_RESULT bosonSetGainMode(const FLR_BOSON_GAINMODE_E gainMode);
 FLR_RESULT bosonGetGainMode(FLR_BOSON_GAINMODE_E *gainMode);
 FLR_RESULT bosonWriteDynamicHeaderToFlash();
