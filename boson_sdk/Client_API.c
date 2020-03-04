@@ -774,6 +774,15 @@ FLR_RESULT bosonGetFfcStatus(FLR_BOSON_FFCSTATUS_E *ffcStatus){
 	return R_SUCCESS;
 } // End of GetFfcStatus()
 
+FLR_RESULT bosonGetLastFFCFrameCount(uint32_t *frameCount){
+    FLR_RESULT returncode = CLIENT_pkgBosonGetLastFFCFrameCount(frameCount);
+    // Check for any errorcode
+    if((uint32_t) returncode){
+        return returncode;
+    }
+    return R_SUCCESS;
+} // End of GetLastFFCFrameCount()
+
 FLR_RESULT dvoSetAnalogVideoState(const FLR_ENABLE_E analogVideoState){
 	FLR_RESULT returncode = CLIENT_pkgDvoSetAnalogVideoState(analogVideoState);
 	// Check for any errorcode

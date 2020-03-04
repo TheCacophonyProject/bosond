@@ -2603,6 +2603,39 @@ FLR_RESULT CLIENT_pkgBosonGetFfcStatus(FLR_BOSON_FFCSTATUS_E *ffcStatus) {
 	
 }// End of CLIENT_pkgBosonGetFfcStatus()
 
+// Synchronous (potentially MultiService incompatible) transmit+receive variant
+FLR_RESULT CLIENT_pkgBosonGetLastFFCFrameCount(uint32_t *frameCount) {
+    // Allocate buffers with space for marshalled data
+    uint32_t sendBytes = 0;
+    const uint8_t sendData[sendBytes];
+    uint32_t receiveBytes = 4;
+    uint8_t receiveData[receiveBytes];
+    uint8_t *outPtr = (uint8_t *)sendData;
+    
+    FLR_RESULT returncode = CLIENT_dispatcher(commandCount++, BOSON_GETLASTFFCFRAMECOUNT, sendData, sendBytes, receiveData, &receiveBytes);
+    
+    // Check for any errorcode
+    if((uint32_t) returncode){
+        return returncode;
+    }
+    
+    uint8_t *inPtr = (uint8_t *)receiveData;
+    
+    // read frameCount from receiveData buffer
+    { //Block to allow reuse of outVal
+        if(inPtr >= (receiveData+receiveBytes)){
+            return R_SDK_PKG_BUFFER_OVERFLOW;
+        }
+        uint32_t outVal;
+        byteToUINT_32( (const uint8_t *) inPtr, &outVal);
+        *frameCount = (uint32_t)outVal;
+        inPtr+=4;
+    }// end of frameCount handling
+    
+    return R_SUCCESS;
+    
+}// End of CLIENT_pkgBosonGetLastFFCFrameCount()
+
 // End Module: boson
 // Begin Module: dvo
 FLR_RESULT CLIENT_pkgDvoSetAnalogVideoState(const FLR_ENABLE_E analogVideoState) {

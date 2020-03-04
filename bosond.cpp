@@ -116,6 +116,21 @@ int sendAll(int sock, const char *data, size_t len) {
 }
 
 
+const char *ffcStatusToStr(FLR_BOSON_FFCSTATUS_E status) {
+    switch (status) {
+    case FLR_BOSON_NO_FFC_PERFORMED:
+        return "never";
+    case FLR_BOSON_FFC_IMMINENT:
+        return "imminent";
+    case FLR_BOSON_FFC_IN_PROGRESS:
+        return "in progress";
+    case FLR_BOSON_FFC_COMPLETE:
+        return "complete";
+    default:
+        return "unknown";
+    }
+}
+
 
 int main(int argc, char** argv) {
     int fd;
@@ -273,15 +288,32 @@ int main(int argc, char** argv) {
                 steady_clock::time_point t1 = steady_clock::now();
                 auto us = duration_cast<microseconds>(t1 - t0).count();
                 auto rate = count / ((float)us / 1e6);
-                std::cout << rate << "Hz" << std::endl;
                 t0 = t1;
                 count = 0;
 
-                /* Example of how to retrieve current frame count from camera
+                /* Example of how to retrieve metadata from camera */
                 uint32_t frameCount;
-                roicGetFrameCount(&frameCount);
-                std::cout << frameCount << " frames" << std::endl;
-                */
+                if (roicGetFrameCount(&frameCount)) {
+                    std::cout << "failed to retrieve frame count" << std::endl;
+                    exit(3);
+                }
+                uint32_t ffcCount;
+                if (bosonGetLastFFCFrameCount(&ffcCount)) {
+                    std::cout << "failed to retrieve FFC frame count" << std::endl;
+                    exit(3);
+                }
+
+                FLR_BOSON_FFCSTATUS_E ffcStatus;
+                if (bosonGetFfcStatus(&ffcStatus)) {
+                    std::cout << "failed to retrieve FFC status" << std::endl;
+                    exit(3);
+                }
+
+                std::cout << "rate: " << rate << "Hz "
+                          << "frames: " << frameCount
+                          << " last ffc: " << ffcCount
+                          << " ffc status: " << ffcStatusToStr(ffcStatus)
+                          << std::endl;
             }
         }
     }
